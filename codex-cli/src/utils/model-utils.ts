@@ -1,4 +1,5 @@
 import { getModelProvider } from "./get-provider";
+import { isLoggingEnabled, log } from "./agent/log";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
 export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
@@ -11,39 +12,57 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
  * lifetime of the process and the results are cached for subsequent calls.
  */
 
-let modelsPromise: Promise<Array<string>> | null = null;
+const cachedModelsByProvider: Map<string, Array<string>> = new Map();
 
-async function fetchModels(): Promise<Array<string>> {
-  const provider = getModelProvider();
+/**
+ * Get a list of available models from the current provider.
+ * Results are cached for performance.
+ */
+export async function getAvailableModels(providerFlag?: string): Promise<Array<string>> {
+  const providerType = providerFlag || process.env["LLM_PROVIDER"] || "openai";
+  
+  if (cachedModelsByProvider.has(providerType)) {
+    return cachedModelsByProvider.get(providerType)!;
+  }
+
   try {
-    const list = await provider.listModels();
-
-    const models: Array<string> = [];
-    for await (const model of list as AsyncIterable<{ id?: string }>) {
-      if (model && typeof model.id === "string") {
-        models.push(model.id);
+    const provider = getModelProvider(providerFlag);
+    const response = await provider.listModels();
+    
+    let models: Array<string> = [];
+    
+    // Different providers return different response formats
+    if (Array.isArray(response)) {
+      models = response;
+    } else if (response?.data && Array.isArray(response.data)) {
+      models = response.data.map((model: any) => model.id || model.name || model);
+    } else {
+      if (isLoggingEnabled()) {
+        log(`Unexpected response format from listModels(): ${JSON.stringify(response)}`);
       }
+      models = [];
     }
-
-    return models.sort();
-  } catch {
-    return [];
+    
+    cachedModelsByProvider.set(providerType, models);
+    return models;
+  } catch (error) {
+    if (isLoggingEnabled()) {
+      log(`Error fetching models: ${error}`);
+    }
+    const emptyArray: Array<string> = [];
+    cachedModelsByProvider.set(providerType, emptyArray);
+    return emptyArray;
   }
 }
 
-export function preloadModels(): void {
-  if (!modelsPromise) {
-    // Fire‑and‑forget – callers that truly need the list should `await`
-    // `getAvailableModels()` instead.
-    void getAvailableModels();
-  }
-}
-
-export async function getAvailableModels(): Promise<Array<string>> {
-  if (!modelsPromise) {
-    modelsPromise = fetchModels();
-  }
-  return modelsPromise;
+/**
+ * Preload the models list in the background.
+ * This is called early in the CLI to warm the cache.
+ */
+export function preloadModels(providerFlag?: string): void {
+  getAvailableModels(providerFlag).catch(() => {
+    // Silently ignore preload errors
+  });
 }
 
 /**
@@ -53,6 +72,7 @@ export async function getAvailableModels(): Promise<Array<string>> {
  */
 export async function isModelSupportedForResponses(
   model: string | undefined | null,
+  providerFlag?: string,
 ): Promise<boolean> {
   if (
     typeof model !== "string" ||
@@ -64,7 +84,7 @@ export async function isModelSupportedForResponses(
 
   try {
     const models = await Promise.race<Array<string>>([
-      getAvailableModels(),
+      getAvailableModels(providerFlag),
       new Promise<Array<string>>((resolve) =>
         setTimeout(() => resolve([]), MODEL_LIST_TIMEOUT_MS),
       ),

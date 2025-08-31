@@ -8,6 +8,8 @@ import { EditedFilesSchema } from "../singlepass/file_ops.js";
 import { ProviderInterface } from "./provider-interface.js";
 
 export class OpenAIProvider implements ProviderInterface {
+  private static readonly DEFAULT_MODEL = "o4-mini";
+  
   private oai: OpenAI;
 
   private apiKey = process.env["OPENAI_API_KEY"] ?? "";
@@ -32,6 +34,13 @@ export class OpenAIProvider implements ProviderInterface {
       },
       ...(this.timeoutMs !== undefined ? { timeout: this.timeoutMs } : {}),
     });
+  }
+
+  /**
+   * Get the default model for OpenAI provider
+   */
+  getDefaultModel(): string {
+    return OpenAIProvider.DEFAULT_MODEL;
   }
 
   /**

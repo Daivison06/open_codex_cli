@@ -11,6 +11,8 @@ import { convertInputToMessages } from "./groq/convertInputToMessages.js";
 import { ProviderInterface } from "./provider-interface.js";
 
 export class GroqProvider implements ProviderInterface {
+  private static readonly DEFAULT_MODEL = "llama-3.3-70b-versatile";
+
   private gq: Groq;
 
   private apiKey = GROQ_API_KEY;
@@ -35,6 +37,13 @@ export class GroqProvider implements ProviderInterface {
       },
       ...(this.timeoutMs !== undefined ? { timeout: this.timeoutMs } : {}),
     });
+  }
+
+  /**
+   * Get the default model for Groq provider
+   */
+  getDefaultModel(): string {
+    return GroqProvider.DEFAULT_MODEL;
   }
 
   /**

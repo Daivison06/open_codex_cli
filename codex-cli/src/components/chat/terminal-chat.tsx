@@ -242,7 +242,7 @@ export default function TerminalChat({
 
         return { review, customDenyMessage, applyPatch };
       },
-      provider: getModelProvider(),
+      provider: getModelProvider(config.provider),
     });
 
     // force a render so JSX below can "see" the freshly created agent
@@ -374,7 +374,7 @@ export default function TerminalChat({
   // ────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      const available = await getAvailableModels();
+      const available = await getAvailableModels(config.provider);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -501,6 +501,7 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
+            currentProvider={config.provider || "openai"}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
               if (isLoggingEnabled()) {

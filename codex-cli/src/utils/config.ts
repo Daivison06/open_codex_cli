@@ -51,6 +51,7 @@ export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
+  provider?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -79,6 +80,7 @@ export type MemoryConfig = {
 export type AppConfig = {
   apiKey?: string;
   model: string;
+  provider?: string;
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -382,6 +384,11 @@ export const saveConfig = (
   const configToSave: StoredConfig = {
     model: config.model,
   };
+
+  // Add provider if it exists
+  if (config.provider) {
+    configToSave.provider = config.provider;
+  }
 
   // Add history settings if they exist
   if (config.history) {

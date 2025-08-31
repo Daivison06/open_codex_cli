@@ -14,7 +14,7 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
-import { initLogger } from "./utils/agent/log";
+import { initLogger, log } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import {
@@ -36,6 +36,7 @@ import { render } from "ink";
 import meow from "meow";
 import path from "path";
 import React from "react";
+import { getProviderDefaultModel } from "./utils/get-provider";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -61,6 +62,7 @@ const cli = meow(
     -c, --config                    Open the instructions file in your editor
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
     -a, --approval-mode <mode>      Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
+    -p, --provider <provider>       Provider to use for completions (default: openai)
 
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
@@ -92,6 +94,7 @@ const cli = meow(
       // misc
       help: { type: "boolean", aliases: ["h"] },
       view: { type: "string" },
+      provider: { type: "string", aliases: ["p"] },
       model: { type: "string", aliases: ["m"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
@@ -243,16 +246,35 @@ let config = loadConfig(undefined, undefined, {
 
 const prompt = cli.input[0];
 const model = cli.flags.model;
+const provider = cli.flags.provider;
 const imagePaths = cli.flags.image as Array<string> | undefined;
+
+let finalModel = model ?? config.model;
+let finalProvider = provider ?? config.provider;
+
+// Se um provider foi especificado via CLI, mas não um modelo específico
+if (provider && !model) {
+  try {
+    const defaultModelForProvider = getProviderDefaultModel(provider);
+    console.log(`Provider set to ${provider} with default model ${defaultModelForProvider}`);
+    finalModel = defaultModelForProvider;
+    
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`Error getting default model for provider ${provider}: ${error}`);
+    process.exit(1);
+  }
+}
 
 config = {
   apiKey,
   ...config,
-  model: model ?? config.model,
+  model: finalModel,
+  provider: finalProvider,
   notify: Boolean(cli.flags.notify),
 };
 
-if (!(await isModelSupportedForResponses(config.model))) {
+if (!(await isModelSupportedForResponses(config.model, provider))) {
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
@@ -344,7 +366,7 @@ const approvalPolicy: ApprovalPolicy =
     ? AutoApprovalMode.AUTO_EDIT
     : AutoApprovalMode.SUGGEST;
 
-preloadModels();
+// preloadModels(provider);
 
 const instance = render(
   <App
@@ -430,6 +452,7 @@ async function runQuietMode({
     instructions: config.instructions,
     approvalPolicy,
     additionalWritableRoots,
+    provider: config.provider,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));

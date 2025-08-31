@@ -27,6 +27,12 @@ export interface ProviderInterface {
     model: string;
     messages: Array<{ role: string; content: string }>;
   }): Promise<string>;
+
+  /**
+   * Get the default model for this provider
+   * Each provider defines its own preferred default model
+   */
+  getDefaultModel(): string;
 }
 
 /**

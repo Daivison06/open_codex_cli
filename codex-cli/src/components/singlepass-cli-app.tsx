@@ -390,7 +390,7 @@ export function SinglePassApp({
         files,
       });
 
-      const provider = getModelProvider();
+      const provider = getModelProvider(config.provider);
 
       const chatResp = await provider.parseCompletion({
         model: config.model,
@@ -574,7 +574,7 @@ export function SinglePassApp({
         <Box borderStyle="round" flexDirection="column" paddingX={1} width={80}>
           <Text>
             <Text bold color="magenta">
-              OpenAI <Text bold>Codex</Text>
+              Open <Text bold>Codex</Text>
             </Text>{" "}
             <Text dimColor>(full context mode)</Text>
           </Text>

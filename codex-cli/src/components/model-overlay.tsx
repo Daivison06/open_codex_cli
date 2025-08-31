@@ -16,6 +16,7 @@ import React, { useEffect, useState } from "react";
  */
 type Props = {
   currentModel: string;
+  currentProvider: string; // Add provider prop
   hasLastResponse: boolean;
   onSelect: (model: string) => void;
   onExit: () => void;
@@ -23,6 +24,7 @@ type Props = {
 
 export default function ModelOverlay({
   currentModel,
+  currentProvider, // Add provider parameter
   hasLastResponse,
   onSelect,
   onExit,
@@ -33,9 +35,10 @@ export default function ModelOverlay({
 
   useEffect(() => {
     (async () => {
-      const models = await getAvailableModels();
+      // Pass the current provider to getAvailableModels
+      const models = await getAvailableModels(currentProvider);
 
-      // Split the list into recommended and “other” models.
+      // Split the list into recommended and "other" models.
       const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
       const others = models.filter((m) => !recommended.includes(m));
 
@@ -48,7 +51,7 @@ export default function ModelOverlay({
         })),
       );
     })();
-  }, []);
+  }, [currentProvider]); // Add provider to dependency array
 
   // ---------------------------------------------------------------------------
   // If the conversation already contains a response we cannot change the model
