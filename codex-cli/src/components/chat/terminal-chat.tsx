@@ -34,6 +34,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
 
 import { getModelProvider } from "../../utils/get-provider";
+import {
+  getChunkContent as loadChunkContent,
+  loadContextIndex as loadStoredContextIndex,
+  searchContextChunks,
+  type ContextIndexData,
+} from "../../utils/context-index/index.js";
 
 type Props = {
   config: AppConfig;
@@ -115,6 +121,9 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const [contextIndex, setContextIndex] = useState<ContextIndexData | null>(
+    null,
+  );
   const handleCompact = async () => {
     setLoading(true);
     try {
@@ -408,6 +417,145 @@ export default function TerminalChat({
     [items, model],
   );
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const index = await loadStoredContextIndex(process.cwd());
+        setContextIndex(index);
+      } catch (error) {
+        if (isLoggingEnabled()) {
+          log(`Failed to load context index: ${inspect(error)}`);
+        }
+        setContextIndex(null);
+      }
+    })();
+  }, []);
+
+  const handleContextCommand = React.useCallback(
+    async (rawFilter: string) => {
+      const filter = rawFilter.trim();
+      if (!filter) {
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `context-empty-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "Usage: /context <filter> to insert matching chunks from the local index.",
+              },
+            ],
+          } as ResponseItem,
+        ]);
+        return;
+      }
+
+      let index = contextIndex;
+      if (!index) {
+        index = await loadStoredContextIndex(process.cwd());
+        setContextIndex(index);
+      }
+
+      if (!index) {
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `context-missing-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "Context index not found. Run 'codex context index' in the repository root and try again.",
+              },
+            ],
+          } as ResponseItem,
+        ]);
+        return;
+      }
+
+      const matches = searchContextChunks(index, filter);
+      if (matches.length === 0) {
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `context-none-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: `No context chunks match "${filter}".`,
+              },
+            ],
+          } as ResponseItem,
+        ]);
+        return;
+      }
+
+      const limit = Number(process.env["CODEX_CONTEXT_SHOW_LIMIT"] || 5);
+      const selected = matches.slice(0, limit);
+      const entries: Array<ResponseItem> = [];
+
+      entries.push({
+        id: `context-info-${Date.now()}`,
+        type: "message",
+        role: "system",
+        content: [
+          {
+            type: "input_text",
+            text: `Inserting ${selected.length} context chunk(s) for filter "${filter}".`,
+          },
+        ],
+      } as ResponseItem);
+
+      for (const match of selected) {
+        const summaryLine = match.summary
+          ? `Summary: ${match.summary}`
+          : undefined;
+        const snippet = await loadChunkContent(process.cwd(), match);
+        const parts = [
+          `Context: ${match.symbol} (${match.path}:${match.range.start.line}-${match.range.end.line})`,
+        ];
+        if (summaryLine) {
+          parts.push(summaryLine);
+        }
+        parts.push(snippet);
+        entries.push({
+          id: `context-chunk-${match.hash}-${Date.now()}`,
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: parts.join("\n\n"),
+            },
+          ],
+        } as ResponseItem);
+      }
+
+      if (matches.length > selected.length) {
+        entries.push({
+          id: `context-more-${Date.now()}`,
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: `... ${matches.length - selected.length} additional match(es) not inserted. Refine the filter to narrow results.`,
+            },
+          ],
+        } as ResponseItem);
+      }
+
+      setItems((prev) => [...prev, ...entries]);
+    },
+    [contextIndex, setItems],
+  );
+
   return (
     <Box flexDirection="column">
       <Box flexDirection="column">
@@ -461,6 +609,7 @@ export default function TerminalChat({
             openHelpOverlay={() => setOverlayMode("help")}
             onCompact={handleCompact}
             active={overlayMode === "none"}
+            onContextCommand={handleContextCommand}
             interruptAgent={() => {
               if (!agent) {
                 return;

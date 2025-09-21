@@ -45,6 +45,7 @@ export default function TerminalChatInput({
   onCompact,
   interruptAgent,
   active,
+  onContextCommand,
 }: {
   isNew: boolean;
   loading: boolean;
@@ -65,6 +66,7 @@ export default function TerminalChatInput({
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
+  onContextCommand?: (filter: string) => Promise<void>;
 }): React.ReactElement {
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
@@ -171,6 +173,31 @@ export default function TerminalChatInput({
       if (inputValue === "/compact") {
         setInput("");
         onCompact();
+        return;
+      }
+
+      if (inputValue.startsWith("/context")) {
+        setInput("");
+        const filter = inputValue.slice("/context".length).trim();
+        if (onContextCommand) {
+          await onContextCommand(filter);
+        } else {
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `context-missing-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text:
+                    "Context index is not available in this mode. Run 'codex context index' and restart the CLI.",
+                },
+              ],
+            } as ResponseItem,
+          ]);
+        }
         return;
       }
 

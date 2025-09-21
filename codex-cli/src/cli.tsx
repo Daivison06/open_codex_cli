@@ -37,6 +37,17 @@ import meow from "meow";
 import path from "path";
 import React from "react";
 import { getProviderDefaultModel } from "./utils/get-provider";
+import {
+  CONTEXT_INDEX_FILENAME,
+  getChunkContent,
+  indexContext,
+  loadContextIndex,
+  searchContextChunks,
+} from "./utils/context-index/index.js";
+import {
+  formatIndexStats,
+  formatShowMatches,
+} from "./utils/context-index/renderers.js";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -52,6 +63,8 @@ const cli = meow(
   Usage
     $ codex [options] <prompt>
     $ codex completion <bash|zsh|fish>
+    $ codex context index [--path <dir>] [--refresh <file>]
+    $ codex context show <symbol> [--path <dir>]
 
   Options
     -h, --help                      Show usage and exit
@@ -85,6 +98,8 @@ const cli = meow(
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
+    $ codex context index --path ./src
+    $ codex context show handler
     $ codex completion bash
 `,
   {
@@ -148,6 +163,14 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
+      path: {
+        type: "string",
+        description: "Root path to index when using the context subcommand",
+      },
+      refresh: {
+        type: "string",
+        description: "Force re-indexing of a specific file when indexing context",
+      },
       // Notification
       notify: {
         type: "boolean",
@@ -175,6 +198,86 @@ _codex_completion() {
   local cur
   cur="\${COMP_WORDS[COMP_CWORD]}"
   COMPREPLY=( $(compgen -o default -o filenames -- "\${cur}") )
+}
+
+if (cli.input[0] === "context") {
+  const sub = cli.input[1];
+  const contextRoot = path.resolve(cli.flags.path || process.cwd());
+  const refreshFlag = cli.flags.refresh;
+  const refreshPaths = refreshFlag ? [String(refreshFlag)] : [];
+
+  const runContextCommand = async () => {
+    if (sub === "index") {
+      const { stats, indexPath } = await indexContext({
+        rootPath: contextRoot,
+        refreshPaths,
+      });
+      // eslint-disable-next-line no-console
+      console.log(formatIndexStats(stats, indexPath));
+      return;
+    }
+
+    if (sub === "show") {
+      const filter = cli.input.slice(2).join(" ").trim();
+      if (!filter) {
+        throw new Error("Usage: codex context show <symbol>");
+      }
+
+      const index = await loadContextIndex(contextRoot);
+      if (!index) {
+        const indexPath = path.join(
+          contextRoot,
+          ".codex",
+          CONTEXT_INDEX_FILENAME,
+        );
+        throw new Error(
+          `Context index not found at ${indexPath}. Run 'codex context index' first.`,
+        );
+      }
+
+      const matches = searchContextChunks(index, filter);
+      if (matches.length === 0) {
+        // eslint-disable-next-line no-console
+        console.log(`No context chunks match "${filter}".`);
+        return;
+      }
+
+      const limit = Number(process.env["CODEX_CONTEXT_SHOW_LIMIT"] || 5);
+      const { lines, truncated } = await formatShowMatches(
+        matches,
+        contextRoot,
+        limit,
+      );
+      for (const line of lines) {
+        // eslint-disable-next-line no-console
+        console.log(line);
+      }
+
+      if (truncated) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `\n… ${matches.length - lines.length} more match(es) not shown. Refine the filter to narrow results.`,
+        );
+      }
+
+      return;
+    }
+
+    throw new Error("Unknown context subcommand. Use 'index' or 'show'.");
+  };
+
+  runContextCommand()
+    .then(() => {
+      process.exit(0);
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      // eslint-disable-next-line no-console
+      console.error(message);
+      process.exit(1);
+    });
+
+  return;
 }
 complete -F _codex_completion codex`,
     zsh: `# zsh completion for codex
