@@ -21,6 +21,9 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  saveConfig,
+  setApiKey,
+  setGroqApiKey,
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
 import {
@@ -36,7 +39,7 @@ import { render } from "ink";
 import meow from "meow";
 import path from "path";
 import React from "react";
-import { getProviderDefaultModel } from "./utils/get-provider";
+import { getProviderDefaultModel, LLMProviderType } from "./utils/get-provider";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -154,6 +157,12 @@ const cli = meow(
         description: "Enable desktop notifications for responses",
       },
 
+      apiKey: {
+        type: "string",
+        description:
+          "API key for provider management commands (e.g. codex provider login)",
+      },
+
       // Experimental mode where whole directory is loaded in context and model is requested
       // to make code edits in a single pass.
       fullContext: {
@@ -165,6 +174,72 @@ const cli = meow(
     },
   },
 );
+
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  [LLMProviderType.OPENAI]: "OPENAI_API_KEY",
+  [LLMProviderType.GROQ]: "GROQ_API_KEY",
+};
+
+const KNOWN_PROVIDERS = new Set<string>(Object.values(LLMProviderType));
+
+const normalizeProvider = (provider?: string): string | undefined => {
+  if (!provider) {
+    return undefined;
+  }
+  return provider.trim().toLowerCase();
+};
+
+const getProviderEnvVar = (provider: string): string | undefined =>
+  PROVIDER_ENV_VARS[provider];
+
+const resolveProviderApiKey = (
+  provider: string,
+  config: AppConfig,
+): { apiKey?: string; envVar?: string; source: "env" | "config" | "legacy" | "none" } => {
+  const envVar = getProviderEnvVar(provider);
+  const fromEnv = envVar ? process.env[envVar]?.trim() : undefined;
+  if (fromEnv) {
+    return { apiKey: fromEnv, envVar, source: "env" };
+  }
+
+  const stored = config.credentials?.[provider]?.trim();
+  if (stored) {
+    return { apiKey: stored, envVar, source: "config" };
+  }
+
+  if (provider === LLMProviderType.OPENAI) {
+    const legacy = config.apiKey?.trim();
+    if (legacy) {
+      return { apiKey: legacy, envVar, source: "legacy" };
+    }
+  }
+
+  return { source: "none" };
+};
+
+const providerRequiresApiKey = (provider: string): boolean =>
+  KNOWN_PROVIDERS.has(provider);
+
+const applyApiKeyForProvider = (provider: string, apiKey?: string): void => {
+  if (!apiKey) {
+    return;
+  }
+
+  if (provider === LLMProviderType.OPENAI) {
+    setApiKey(apiKey);
+    return;
+  }
+
+  if (provider === LLMProviderType.GROQ) {
+    setGroqApiKey(apiKey);
+    return;
+  }
+
+  const envVar = getProviderEnvVar(provider);
+  if (envVar) {
+    process.env[envVar] = apiKey;
+  }
+};
 
 // Handle 'completion' subcommand before any prompting or API calls
 if (cli.input[0] === "completion") {
@@ -197,6 +272,128 @@ complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
   console.log(script);
   process.exit(0);
 }
+
+if (cli.input[0] === "provider") {
+  const action = normalizeProvider(cli.input[1]);
+  const providerArg = normalizeProvider(
+    (cli.input[2] as string | undefined) || (cli.flags.provider as string | undefined),
+  );
+
+  const config = loadConfig(undefined, undefined, { disableProjectDoc: true });
+  const credentials = { ...(config.credentials ?? {}) };
+
+  const ensureKnownProvider = (provider: string | undefined) => {
+    if (!provider) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "codex provider <action> requires a provider name, e.g. `codex provider login openai`.",
+      );
+      process.exit(1);
+    }
+
+    if (!KNOWN_PROVIDERS.has(provider)) {
+      const knownList = Array.from(KNOWN_PROVIDERS).join(", ");
+      // eslint-disable-next-line no-console
+      console.error(
+        `Unknown provider "${provider}". Known providers: ${knownList}.`,
+      );
+      process.exit(1);
+    }
+
+    return provider;
+  };
+
+  const getDisplaySource = (provider: string): Array<string> => {
+    const sources: Array<string> = [];
+    const envVar = PROVIDER_ENV_VARS[provider];
+    if (envVar && process.env[envVar]) {
+      sources.push(`env:${envVar}`);
+    }
+    if (credentials[provider]) {
+      sources.push("config:~/.codex/config.json");
+    }
+    if (sources.length === 0) {
+      sources.push("not set");
+    }
+    return sources;
+  };
+
+  switch (action) {
+    case "list": {
+      const known = new Set<string>([
+        ...Object.keys(PROVIDER_ENV_VARS),
+        ...Object.keys(credentials),
+      ]);
+      if (known.size === 0) {
+        // eslint-disable-next-line no-console
+        console.log("No provider credentials found.");
+        process.exit(0);
+      }
+
+      // eslint-disable-next-line no-console
+      console.log("Configured provider credentials:");
+      for (const provider of Array.from(known).sort()) {
+        const sources = getDisplaySource(provider).join(", ");
+        // eslint-disable-next-line no-console
+        console.log(`- ${provider}: ${sources}`);
+      }
+      process.exit(0);
+      break;
+    }
+
+    case "login": {
+      const provider = ensureKnownProvider(providerArg);
+      const apiKey = (cli.flags.apiKey as string | undefined)?.trim();
+      if (!apiKey) {
+        const envVar = PROVIDER_ENV_VARS[provider];
+        const hint = envVar
+          ? `Pass --api-key or set ${envVar} before running the command.`
+          : "Pass --api-key with the provider secret.";
+        // eslint-disable-next-line no-console
+        console.error(`Missing API key for provider "${provider}". ${hint}`);
+        process.exit(1);
+      }
+
+      credentials[provider] = apiKey;
+      config.credentials = credentials;
+      saveConfig(config);
+
+      applyApiKeyForProvider(provider, apiKey);
+
+      // eslint-disable-next-line no-console
+      console.log(`Stored API key for provider "${provider}".`);
+      process.exit(0);
+      break;
+    }
+
+    case "logout":
+    case "remove": {
+      const provider = ensureKnownProvider(providerArg);
+      if (!credentials[provider]) {
+        // eslint-disable-next-line no-console
+        console.log(`No stored API key for provider "${provider}".`);
+        process.exit(0);
+      }
+
+      delete credentials[provider];
+      config.credentials = credentials;
+      saveConfig(config);
+
+      // eslint-disable-next-line no-console
+      console.log(`Removed stored API key for provider "${provider}".`);
+      process.exit(0);
+      break;
+    }
+
+    default: {
+      // eslint-disable-next-line no-console
+      console.error(
+        "Unknown provider subcommand. Use one of: list, login, logout.",
+      );
+      process.exit(1);
+    }
+  }
+}
 // Show help if requested
 if (cli.flags.help) {
   cli.showHelp();
@@ -217,25 +414,6 @@ if (cli.flags.config) {
   process.exit(0);
 }
 
-// ---------------------------------------------------------------------------
-// API key handling
-// ---------------------------------------------------------------------------
-
-const apiKey = process.env["OPENAI_API_KEY"];
-
-if (!apiKey) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
-  );
-  process.exit(1);
-}
-
 const fullContextMode = Boolean(cli.flags.fullContext);
 let config = loadConfig(undefined, undefined, {
   cwd: process.cwd(),
@@ -245,36 +423,69 @@ let config = loadConfig(undefined, undefined, {
 });
 
 const prompt = cli.input[0];
-const model = cli.flags.model;
-const provider = cli.flags.provider;
+const modelFlag = cli.flags.model as string | undefined;
+const providerFlagRaw = cli.flags.provider as string | undefined;
+const providerFlag = normalizeProvider(providerFlagRaw);
 const imagePaths = cli.flags.image as Array<string> | undefined;
 
-let finalModel = model ?? config.model;
-let finalProvider = provider ?? config.provider;
+const storedProvider = normalizeProvider(config.provider);
+const envProvider = normalizeProvider(process.env["LLM_PROVIDER"]);
 
-// Se um provider foi especificado via CLI, mas não um modelo específico
-if (provider && !model) {
+let finalProvider = providerFlag ?? storedProvider ?? envProvider ?? LLMProviderType.OPENAI;
+let finalModel = modelFlag ?? config.model;
+
+if (providerFlag && !modelFlag) {
   try {
-    const defaultModelForProvider = getProviderDefaultModel(provider);
-    console.log(`Provider set to ${provider} with default model ${defaultModelForProvider}`);
+    const defaultModelForProvider = getProviderDefaultModel(providerFlag);
+    console.log(
+      `Provider set to ${providerFlag} with default model ${defaultModelForProvider}`,
+    );
     finalModel = defaultModelForProvider;
-    
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error(`Error getting default model for provider ${provider}: ${error}`);
+    console.error(
+      `Error getting default model for provider ${providerFlag}: ${error}`,
+    );
     process.exit(1);
   }
 }
 
+const { apiKey: resolvedApiKey, envVar: resolvedEnvVar } =
+  resolveProviderApiKey(finalProvider, config);
+
+if (!resolvedApiKey && providerRequiresApiKey(finalProvider)) {
+  const envHint = resolvedEnvVar
+    ? `Set the environment variable ${chalk.bold(resolvedEnvVar)}`
+    : "Provide an API key";
+  const loginHint = `or run ${chalk.bold(`codex provider login ${finalProvider}`)}`;
+  let extra = "";
+  if (finalProvider === LLMProviderType.OPENAI) {
+    extra =
+      `You can create a key here: ${chalk.bold(
+        chalk.underline("https://platform.openai.com/account/api-keys"),
+      )}\n`;
+  }
+
+  // eslint-disable-next-line no-console
+  console.error(
+    `\n${chalk.red(`Missing API key for provider "${finalProvider}".`)}\n\n` +
+      `${envHint} ${loginHint}.\n${extra}`,
+  );
+  process.exit(1);
+}
+
+applyApiKeyForProvider(finalProvider, resolvedApiKey);
+
 config = {
-  apiKey,
   ...config,
+  apiKey: resolvedApiKey,
   model: finalModel,
   provider: finalProvider,
-  notify: Boolean(cli.flags.notify),
+  notify:
+    cli.flags.notify === undefined ? config.notify : Boolean(cli.flags.notify),
 };
 
-if (!(await isModelSupportedForResponses(config.model, provider))) {
+if (!(await isModelSupportedForResponses(config.model, finalProvider))) {
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
