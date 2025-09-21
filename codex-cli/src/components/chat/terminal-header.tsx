@@ -3,6 +3,7 @@ import type { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { Box, Text } from "ink";
 import path from "node:path";
 import React from "react";
+import TerminalTitle from "./terminal-title.js";
 
 export interface TerminalHeaderProps {
   terminalRows: number;
@@ -27,6 +28,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
 }) => {
   return (
     <>
+      <TerminalTitle />
       {terminalRows < 10 ? (
         // Compact header for small terminal windows
         <Text>

@@ -36,19 +36,27 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
-export const GROQ_API_KEY = process.env["GROQ_API_KEY"] || "";
+export let GROQ_API_KEY = process.env["GROQ_API_KEY"] || "";
 export const GROQ_BASE_URL = process.env["GROQ_BASE_URL"] || "";
 export const GROQ_TIMEOUT_MS =
   parseInt(process.env["GROQ_TIMEOUT_MS"] || "0", 10) || undefined;
 
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
+  process.env["OPENAI_API_KEY"] = apiKey;
+}
+
+export function setGroqApiKey(apiKey: string): void {
+  GROQ_API_KEY = apiKey;
+  process.env["GROQ_API_KEY"] = apiKey;
 }
 
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // Represents config as persisted in config.json.
+export type ProviderCredentials = Record<string, string>;
+
 export type StoredConfig = {
   model?: string;
   provider?: string;
@@ -62,12 +70,13 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  credentials?: ProviderCredentials;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
 // we always fall back to DEFAULT_MODEL on load, so updates to the default keep
 // propagating to existing users until they explicitly set a model.
-export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
+export const EMPTY_STORED_CONFIG: StoredConfig = { model: "", credentials: {} };
 
 // Pre‑stringified JSON variant so we don’t stringify repeatedly.
 const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
@@ -91,6 +100,7 @@ export type AppConfig = {
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
+  credentials?: ProviderCredentials;
 };
 
 // ---------------------------------------------------------------------------
@@ -275,7 +285,14 @@ export const loadConfig = (
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
+    credentials: { ...(storedConfig.credentials ?? {}) },
   };
+
+  if (storedConfig.provider && storedConfig.provider.trim() !== "") {
+    config.provider = storedConfig.provider.trim();
+  } else if (process.env["LLM_PROVIDER"] && process.env["LLM_PROVIDER"] !== "") {
+    config.provider = process.env["LLM_PROVIDER"] as string;
+  }
 
   // -----------------------------------------------------------------------
   // First‑run bootstrap: if the configuration file (and/or its containing
@@ -388,6 +405,10 @@ export const saveConfig = (
   // Add provider if it exists
   if (config.provider) {
     configToSave.provider = config.provider;
+  }
+
+  if (config.credentials && Object.keys(config.credentials).length > 0) {
+    configToSave.credentials = config.credentials;
   }
 
   // Add history settings if they exist

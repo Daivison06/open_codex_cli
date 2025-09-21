@@ -1,6 +1,10 @@
 import type * as fsType from "fs";
 
-import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import {
+  DEFAULT_AGENTIC_MODEL,
+  loadConfig,
+  saveConfig,
+} from "../src/utils/config.js"; // parent import first
 import { tmpdir } from "os";
 import { join } from "path";
 import { test, expect, beforeEach, afterEach, vi } from "vitest";
@@ -60,7 +64,7 @@ test("loads default config if files don't exist", () => {
   });
   // Keep the test focused on just checking that default model and instructions are loaded
   // so we need to make sure we check just these properties
-  expect(config.model).toBe("o4-mini");
+  expect(config.model).toBe(DEFAULT_AGENTIC_MODEL);
   expect(config.instructions).toBe("");
 });
 
@@ -82,6 +86,29 @@ test("saves and loads config correctly", () => {
   // Check just the specified properties that were saved
   expect(loadedConfig.model).toBe(testConfig.model);
   expect(loadedConfig.instructions).toBe(testConfig.instructions);
+});
+
+test("persists provider credentials when saving config", () => {
+  const testConfig = {
+    model: "test-model",
+    instructions: "",
+    notify: false,
+    credentials: {
+      openai: "openai-key",
+      groq: "groq-key",
+    },
+  };
+
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  expect(memfs[testConfigPath]).toContain("\"credentials\":");
+
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  expect(loadedConfig.credentials?.openai).toBe("openai-key");
+  expect(loadedConfig.credentials?.groq).toBe("groq-key");
 });
 
 test("loads user instructions + project doc when codex.md is present", () => {
